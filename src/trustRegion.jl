@@ -360,7 +360,7 @@ function trust_region_step!(cache::TrustRegionCache)
     cache.loss_new = get_loss(fu_new)
 
     # Compute the ratio of the actual reduction to the predicted reduction.
-    cache.r = -(loss - cache.loss_new) / (step_size' * g + step_size' * H * step_size / 2)
+    cache.r = -(loss - cache.loss_new) / (dot(step_size, g) + dot(step_size, H, step_size) / 2)
     @unpack r = cache
 
     if radius_update_scheme === RadiusUpdateSchemes.Simple 
@@ -436,7 +436,37 @@ function trust_region_step!(cache::TrustRegionCache)
     end
 end
 
-function dogleg!(cache::TrustRegionCache)
+function dogleg!(cache::TrustRegionCache{true})
+    @unpack u_tmp, trust_r = cache
+
+    # Test if the full step is within the trust region.
+    if norm(u_tmp) ≤ trust_r
+        cache.step_size .= u_tmp
+        return
+    end
+
+    # Calcualte Cauchy point, optimum along the steepest descent direction.
+    negδsd = cache.g
+    norm_δsd = norm(negδsd)
+    if norm_δsd ≥ trust_r
+        cache.step_size .= .-negδsd .* trust_r ./ norm_δsd
+        return
+    end
+
+    # Find the intersection point on the boundary (rearrange dot products to avoid allocations).
+    dot_u_tmp = dot(u_tmp, u_tmp)
+    dot_negδsd = dot(negδsd, negδsd)
+    dot_u_tmp_negδsd = dot(u_tmp, negδsd)
+    dot_N_sd = dot_u_tmp + dot_negδsd + 2 * dot_u_tmp_negδsd
+    dot_sd_N_sd = -dot_negδsd - dot_u_tmp_negδsd
+    dot_sd = dot_negδsd
+
+    fact = dot_sd_N_sd^2 - dot_N_sd * (dot_sd - trust_r^2)
+    τ = (-dot_sd_N_sd + sqrt(fact)) / dot_N_sd
+    cache.step_size .= .-negδsd .+ τ .* (u_tmp .+ negδsd)
+end
+
+function dogleg!(cache::TrustRegionCache{false})
     @unpack u_tmp, trust_r = cache
 
     # Test if the full step is within the trust region.
